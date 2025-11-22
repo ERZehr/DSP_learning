@@ -3,8 +3,8 @@ close all; clear; clc;
 
 % Declare system parameters
 L = 10;            % upsamples per symbol
-M = 2;             % M-PSK
-span = 5;          % Filter span (pulse shape filter order is span*L + 1)
+M = 4;             % M-PSK
+span = 10;          % Filter span (pulse shape filter order is span*L)
 rolloff = 0.2;       % Alpha (0 goes to sinc, 1 foes to more square shaped in time)
 numSymbols = 100;  % Number of symbols in transmission  
 
@@ -55,14 +55,16 @@ polyphaseFilters = genPolyphase(L, h);
 % Apply the polypohase filters to each unique symbol
 uniqueShapedPulses = cell(1, length(symbolMap));
 for k = 1:length(symbolMap)
-    paddedUNiqueSymbolMap = [zeros(1,L) symbolMap(k) zeros(1,L)];
+    paddedUNiqueSymbolMap = [zeros(1,3*L) symbolMap(k) zeros(1,3*L)];
     uniqueShapedPulses{k} = applyPolyphaseFilters(paddedUNiqueSymbolMap, polyphaseFilters, L);
 end
 
 
 % Apply the polypohase filters to the whole signal
 upsampledFilterdSignal = applyPolyphaseFilters(MpskSymbols, polyphaseFilters, L);
-
+[H_signal, w] = freqz(upsampledFilterdSignal, 1, 4096);
+H_signal = [flip(H_signal)' H_signal']; w = [-flip(w)' w'];
+H_signal_dB = 20*log10(abs(H_signal));
 
 % Plot unique symbols of output signal
 figure(4); % Real
@@ -92,7 +94,18 @@ title("RRC Pulse Summed Output Signals");
 yline(1,'--'); yline(-1,'--');
 grid on;
 
-figure(7); % Real
+figure(7); % Summed filter output frequency domain
+plot(w, H_signal_dB);
+title('Filter Output in Frequency Domain');
+set(gca, 'XTick', -pi:pi/10:pi);
+set(gca, 'XTickLabel', {'-pi', '-0.9pi', '-0.8pi', '-0.7pi', '-0.6pi', ...
+    '-0.5pi', '-0.4pi', '-0.3pi', '-0.2pi', '-0.1pi', '0', '0.1pi','0.2pi', ...
+    '0.3pi', '0.4pi', '0.5pi', '0.6pi', '0.7pi', '0.8pi', '0.9pi', 'pi'});
+xlabel('Normalized Frequency');
+ylabel('Magnitude (dB)');
+grid on;
+
+figure(8); % Real
 hold on;
 plot(real(upsampledFilterdSignal));
 title("RRC Summed Real Output Signals");
@@ -100,7 +113,7 @@ yline(1,'--'); yline(-1,'--');
 grid on;
 hold off;
 
-figure(8);% Complex
+figure(9);% Complex
 plot(imag(upsampledFilterdSignal));
 title("RRC Summed Complex Output Signals");
 yline(1,'--'); yline(-1,'--');
