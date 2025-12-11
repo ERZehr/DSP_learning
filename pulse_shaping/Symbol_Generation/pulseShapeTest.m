@@ -1,0 +1,103 @@
+function [shapedWaveform, returnVars] = pulseShapeTest(shape, signal, argVars)
+    % signal                 : input signal
+    % interpolationFactor    : signal upsampling factor
+    % signalEncodeDimensions : M for Mphase shift keying
+    % span                   : pulse shape filter order = span*interpolationFactor
+    % rolloff                : 0 -> rect in freq, 1 -> wide lobe in freq
+    switch lower(shape)
+        case 'raisedcosine'
+            % input vars
+            interpolationFactor    = argVars(1);
+            signalEncodeDimensions = argVars(2);
+            span                   = argVars(3);
+            rolloff                = argVars(4);
+            % calculations
+            [bitGroups, symbolMap, MpskSymbols] = genMpsk(signalEncodeDimensions, signal, interpolationFactor, span);
+            h = genPulseFilter(rolloff, span, interpolationFactor, "sqrt");
+            polyphaseFilters = genPolyphase(interpolationFactor, h);
+            shapedWaveform = applyPolyphaseFilters(MpskSymbols, polyphaseFilters, interpolationFactor);
+            returnVars = [bitGroups symbolMap polyphaseFilters];
+
+        case 'gaussian'
+            error('Not supported');
+
+        case 'hann'
+            error('Not supported');
+
+        otherwise
+            error('Unknown shaping type');
+    end
+end
+
+% Map input signal to the MPSK constellation
+function [bitGroups, symbolMap, MpskSymbols] = genMpsk(signalEncodeDimensions, signal, interpolationFactor, span)
+    signal = primeSignal(signalEncodeDimensions, signal, interpolationFactor, span); % remove transient
+    bitGroups = reshape(signal, log2(signalEncodeDimensions), []).';
+    symbolMap = genSymbolMap(signalEncodeDimensions);
+    if signalEncodeDimensions==2
+        MpskSymbols = (2*bitGroups - 1)';
+    else 
+        indices = bi2de(bitGroups, 'left-msb') + 1;
+        grayIndices = bitxor(indices-1, floor((indices-1)/2)) + 1;
+        MpskSymbols = symbolMap(grayIndices);
+    end
+end
+
+% Generate MPSK constellation
+function [symbolmap] = genSymbolMap(signalEncodeDimensions)
+    theta = pi/signalEncodeDimensions;
+    symbolmap = exp(1j*2*pi*(0:signalEncodeDimensions-1)/signalEncodeDimensions);
+    if signalEncodeDimensions~= 2
+        symbolmap = symbolmap*exp(1j*theta);
+    end
+end
+
+% Generate pulse shape impulse response with root raised cosine
+function [h] = genPulseFilter(rolloff, span, interpolationFactor, type)
+    h = rcosdesign(rolloff, span, interpolationFactor, type);
+    h = h / max(h);
+end
+
+% Split inpulse response into polyphase components
+function [polyphaseFilters] = genPolyphase(L, h)
+    polyphaseFilters = cell(1, L);
+    for k = 1:L
+        polyphaseFilters{k} = h(k:L:end);
+    end
+end
+
+% Filter signal with polyphase components
+function [outputSignal] = applyPolyphaseFilters(signal, polyphaseFilters, interpolationFactor)
+    branchOutputs  = cell(1, length(polyphaseFilters));
+    lengths = zeros(1, length(polyphaseFilters));
+    % Apply Filters and upsample
+    for k = 1:length(polyphaseFilters)
+        branchOutputs{k} = filter(polyphaseFilters{k}, 1, signal);
+        branchOutputs{k} = upfirdn(branchOutputs{k}, 1, interpolationFactor);
+    end
+    % Apply delay values for polyphase reconstruction
+    for k = 1:length(polyphaseFilters)
+        branchOutputs{k} = [zeros(1,k-1) branchOutputs{k}];
+        lengths(k) = length(branchOutputs{k});
+    end
+    % Find the max length of branch outputs to pad if (taps%L != 0)
+    maxLen = max(lengths);
+    for k = 1:length(polyphaseFilters)
+        branchOutputs{k}(end+1:maxLen) = 0;
+    end
+    % Combine the delayed polyphase signals back together
+    outputSignal = sum(cat(1, branchOutputs{:}), 1);
+    outputSignal = primeStrip(outputSignal, interpolationFactor, length(polyphaseFilters)/interpolationFactor);
+end
+
+% Append transient primeing to signal
+function [primedSignal] = primeSignal(signalEncodeDimensions, signal, interpolationFactor, span)
+    padbits = zeros(1, span*interpolationFactor*signalEncodeDimensions);
+    primedSignal = [padbits signal];
+end
+
+% strip transient primeing to signal
+function [strippedSignal] = primeStrip(signal, interpolationFactor, span)
+    primePaddingLen = span*interpolationFactor;
+    strippedSignal = signal(primePaddingLen:end);
+end
