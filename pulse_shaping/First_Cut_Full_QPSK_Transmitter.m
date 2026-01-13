@@ -6,31 +6,24 @@ close all; clear; clc; fig_n = 0;
 
 % Symbol Generation:
 % Consider using OMPSK here for better channel performance allegedly
-numBits = 32;
+numBits = 64;
 numBytes = numBits / 8;
 M = 4;              % M-PSK
 numSymbols = numBits/log2(M);   % Number of symbols in transmission
-Fs_in = 100; % symbol frequency (Hz)
+Fs_in = 1e8; % input symbol frequency (Hz)
 symbol_duration = numSymbols/Fs_in; % input signal duration (s)
-
-% IQ generation
-carrier_frequency_multiplier = 1;                       % Carrier Sinusoid Cycles Per Symbol
-carrier_frequency = carrier_frequency_multiplier*Fs_in; % Carrier Signal Frequency (Hz)
-carrier_period = 1/carrier_frequency;                   % Carrier Signal Period (s)
-sinusoid_sample_rate = 64;                             % Number of Samples Per Carrier Sinusoid
-t_delta = Fs_in*carrier_frequency_multiplier*sinusoid_sample_rate; % Time Between Carrier Sinusoid Samples
-carrier_to_input_clk_ratio = t_delta/Fs_in;          % Ratio of carrier clock to symbol Clock 
-t = 0:1/t_delta:symbol_duration-1/t_delta;
 
 % Pulse Shaping
 L = 16;             % Polyphase Segments
 span = 16;          % Filter span (pulse shape filter order is span*L)
-rolloff = 1;      % Alpha (0 goes to sinc, 1 foes to more square shaped in time) "excess bandwidth"
-F_int = 23.54;  % interpolation factor
-Fs_out = Fs_in * F_int;  % output pulse shpaer frequency
-NCO_bits = 0;
-C = 2^NCO_bits;       % NCO modulus
+rolloff = 1;      % Alpha (0 goes to sinc, 1 goes to more square shaped in time) "excess bandwidth"
+F_int = 16;  %  pulse shpaer interpolation factor
+Fs_out = Fs_in * F_int;  % output pulse shpaer sample frequency
+C = 1;
 phi_int = C/F_int;    % NCO Step
+
+% IQ generation
+carrier_frequency = 1e8;
 
 % Channel Parameters
 linear_channel_attenuation = 1;   % greater number = greater attenuation
@@ -42,8 +35,8 @@ salt_and_pepper_noise_level = .8;  % greater number = greater noise
 % Generate MPSK symbols
 bits = randi([0 1], numBits, 1);
 % Plot the input bits and complex signals in time
-symbol_axis = 0:1/Fs_in:symbol_duration*log2(M) - (1/Fs_in);
-fig_n = stemplot(fig_n, symbol_axis, bits, 'Input BInary Signal', 'Time (s)', 'Magnitude');
+symbol_axis = 0:1/Fs_in:numBits/Fs_in - (1/Fs_in);
+fig_n = stemplot(fig_n, symbol_axis, bits, 'Input Binary Signal', 'Time (s)', 'Magnitude');
 
 % split into I and Q and assign constellation multiplier
 [bitGroups, symbolMap, MpskSymbols] = genMpsk(M, bits);
@@ -58,43 +51,8 @@ fig_n = stemplot(fig_n, symbol_axis, imag(MpskSymbols), 'Input Mpsk Q signal', '
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Generate combined IQ signal
-% If we want n sinusoids per symbol, we need to "sample and hold"
-% the input symbol for n samples
-real_up = repelem(real(MpskSymbols), carrier_to_input_clk_ratio);
-complex_up = repelem(imag(MpskSymbols), carrier_to_input_clk_ratio);
-symbol_axis_up = 0:1/t_delta:symbol_duration - (1/t_delta);
-
-% Define I and Q
-I = cos(2*pi*carrier_frequency*t);
-Q = sin(2*pi*carrier_frequency*t);
-
-% Multiply the input I and Q by the carrier I and Q
-I_of_s = I .* real_up;
-Q_of_s = Q .* complex_up;
-
-% Plot the I and Q modulated signals
-fig_n = stemplot(fig_n, t, I_of_s, 'I of s', 'Time (s)', 'Magnitude');
-fig_n = stemplot(fig_n, t, Q_of_s, 'Q of S', 'Time (s)', 'Magnitude');
-
-% Combine I and Q signals to form the modulated signal
-s = I_of_s + Q_of_s;
-
-% plot the summed modulated signal
-fig_n = stemplot(fig_n, t, s, 's', 'Time (s)', 'Magnitude');
-
-% Compute the Fourier Transform of the modulated signal
-S = fft(s);
-S = fftshift(S);
-sy = (-length(S)/2:length(S)/2-1) * (Fs_in*carrier_to_input_clk_ratio/length(S));
-
-% Plot the magnitude spectrum of the modulated signal
-fig_n = stemplot(fig_n, sy, abs(S), 'Frequency Spectrum of IQ Mixer Output', 'Frequency (Hz)', 'Magnitude');
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Generate pulse shaping filter
-h = genPulseFilter(rolloff, span, L, "sqrt");
+h = genPulseFilter(rolloff, span, L, "normal");
 [H, w] = freqz(h, 1, 4096);
 H = [flip(H)' H']; w = [-flip(w)' w'];
 H_dB = 20*log10(abs(H));
@@ -133,14 +91,16 @@ end
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Apply pulse shaping filter to synthesised IQ output signal
+% Apply pulse shaping filter to I and Q symbols
 shift_register = zeros(row_size,1);
 output_signal = [];
 accumulator = 0;
 
-for k = 1:(length(s)+row_size-1) % ensure the whole signal runs through a zero initialized regester and runs all the way out
-    if k <= length(s)
-        shift_register = [real(s(k)); shift_register(1:end-1)];
+I_symbols = real(MpskSymbols);
+
+for k = 1:(length(I_symbols)+row_size-1) % ensure the whole signal runs through a zero initialized regester and runs all the way out
+    if k <= length(I_symbols)
+        shift_register = [real(I_symbols(k)); shift_register(1:end-1)];
     else
         shift_register = [0; shift_register(1:end-1)];
     end
@@ -152,24 +112,79 @@ for k = 1:(length(s)+row_size-1) % ensure the whole signal runs through a zero i
     end
     accumulator = accumulator - C;
 end
-s_prime = output_signal;
+I_symbols_shpaed = output_signal;
+
+
+output_signal = [];
+accumulator = 0;
+Q_symbols = imag(MpskSymbols);
+
+for k = 1:(length(Q_symbols)+row_size-1) % ensure the whole signal runs through a zero initialized regester and runs all the way out
+    if k <= length(Q_symbols)
+        shift_register = [real(Q_symbols(k)); shift_register(1:end-1)];
+    else
+        shift_register = [0; shift_register(1:end-1)];
+    end
+    while accumulator < C
+        ROM_addr_p = floor(L*accumulator/C);
+        output_sum = sum(shift_register .* ROM(:,ROM_addr_p+1));
+        output_signal = [output_signal, output_sum];
+        accumulator = accumulator + phi_int;
+    end
+    accumulator = accumulator - C;
+end
+Q_symbols_shpaed = output_signal;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Visualize Outputs
-t_delta_new = length(s_prime)/symbol_duration; % the signal has been interpolated by F_int
-t_filtered = 0:1/t_delta_new:symbol_duration-1/t_delta_new;
-
 % Plot the output of the pulse shaper filter
-fig_n = stemplot(fig_n, t_filtered, s_prime, 'ROM-Shift Pulse Shaper Output', 'Time (s)', 'Magnitude');
+symbol_axis = 0:1/Fs_out:length(I_symbols_shpaed)/Fs_out - (1/Fs_out);
+fig_n = stemplot(fig_n, symbol_axis, I_symbols_shpaed, 'I symbols shpaed', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, symbol_axis, Q_symbols_shpaed, 'Q symbols shpaed', 'Time (s)', 'Magnitude');
 
-% Compute the Fourier Transform of the output signal
-S_prime = fft(s_prime);
-S_prime = fftshift(S_prime);
-f_S_prime = (-length(S_prime)/2:length(S_prime)/2-1) * (Fs_out*carrier_to_input_clk_ratio/length(S_prime));
+% Compute the Fourier Transform of the I output signal
+I_shpaed_dft = fft(I_symbols_shpaed);
+I_shpaed_dft = fftshift(I_shpaed_dft);
+I_shpaed_dft_axis = (-length(I_shpaed_dft)/2:length(I_shpaed_dft)/2-1) * (Fs_out/length(I_shpaed_dft));
+% Compute the Fourier Transform of the Q output signal
+Q_shpaed_dft = fft(Q_symbols_shpaed);
+Q_shpaed_dft = fftshift(Q_shpaed_dft);
+Q_shpaed_dft_axis = (-length(Q_shpaed_dft)/2:length(Q_shpaed_dft)/2-1) * (Fs_out/length(Q_shpaed_dft));
 
-% Plot the magnitude spectrum of the modulated signal
-fig_n = stemplot(fig_n, f_S_prime, abs(S_prime), 'Frequency Spectrum of ROM-Shift Pulse Shaper Output', 'Frequency (Hz)', 'Magnitude');
+% Plot the magnitude spectrum of the modulated signals
+fig_n = stemplot(fig_n, I_shpaed_dft_axis, abs(I_shpaed_dft), 'Frequency Spectrum of ROM-Shift Pulse Shaper Output I', 'Frequency (Hz)', 'Magnitude');
+fig_n = stemplot(fig_n, Q_shpaed_dft_axis, abs(Q_shpaed_dft), 'Frequency Spectrum of ROM-Shift Pulse Shaper Output Q', 'Frequency (Hz)', 'Magnitude');
+
+% Eye Diagrams
+% I
+figure(fig_n);
+eyediagram(I_symbols_shpaed, F_int);
+fig_n = fig_n + 1;
+% Q
+figure(fig_n)
+eyediagram(Q_symbols_shpaed, F_int);
+fig_n = fig_n + 1;
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Generate combined IQ signal
+n = 0:length(I_symbols_shpaed)-1;
+
+% Define I and Q
+cos_lo = cos(2*pi*carrier_frequency/Fs_out*n);
+sin_lo = sin(2*pi*carrier_frequency/Fs_out*n);
+% Plot the LO signals
+fig_n = stemplot(fig_n, symbol_axis, cos_lo, 'Cos LO', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, symbol_axis, sin_lo, 'Sin LO', 'Time (s)', 'Magnitude');
+
+% geneteate I and Q mixed Signals
+I_mix = I_symbols_shpaed .* cos_lo - Q_symbols_shpaed .* sin_lo; % The actual real signal
+Q_mix = I_symbols_shpaed .* sin_lo + Q_symbols_shpaed .* cos_lo;
+% plot the I and Q mixed Signals
+fig_n = stemplot(fig_n, symbol_axis, I_mix, 'I mix', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, symbol_axis, Q_mix, 'Q mix', 'Time (s)', 'Magnitude');
+
+s_prime = I_mix;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -177,8 +192,9 @@ fig_n = stemplot(fig_n, f_S_prime, abs(S_prime), 'Frequency Spectrum of ROM-Shif
 % This assumes a DAC that doesnt do any interpolating
 % Plot the output of the DAC
 s_prime_t = s_prime;
-fig_n = contplot(fig_n, t_filtered, s_prime_t, 'DAC Output', 'Time (s)', 'Magnitude');
+fig_n = contplot(fig_n, symbol_axis, s_prime_t, 'DAC Output', 'Time (s)', 'Magnitude');
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 
 
 %%%%%%%%%%%%%%%%%%%%%%% CHANNEL %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -192,39 +208,12 @@ impulses = rand(1,length(s_prime)) < prob;
 saltAndPepperNoise(impulses) = (2*randi([0,1],1,sum(impulses))-1)'/(1/salt_and_pepper_noise_level);
 
 total_noise = gaussNoise + saltAndPepperNoise;
-fig_n = stemplot(fig_n, t_filtered, total_noise, 'Channel Noise', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, symbol_axis, total_noise, 'Channel Noise', 'Time (s)', 'Magnitude');
 
 s_prime_recieved_t = s_prime * (1/linear_channel_attenuation) + total_noise;
 
-fig_n = contplot(fig_n, t_filtered, s_prime_recieved_t, 'Recieved Analog Channel Signal', 'Time (s)', 'Magnitude');
+fig_n = contplot(fig_n, symbol_axis, s_prime_recieved_t, 'Recieved Analog Channel Signal', 'Time (s)', 'Magnitude');
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% For ADC visualization purposes "convert the signal back to digital"
-% Assume an ADC with a high sample rate
-ADC_upsample_factor = 32;
-% "sample a lot"
-t_delta_ADC = t_delta_new*ADC_upsample_factor;
-t_ADC = 0:1/t_delta_ADC:symbol_duration-1/t_delta_ADC;
-% Check that the ADC has a LPF for interpolation. You may not get this for
-% free
-s_prime_recieved = interp(s_prime_recieved_t, ADC_upsample_factor);
-
-% Plot the output of the ADC
-fig_n = stemplot(fig_n, t_ADC, s_prime_recieved, 'ADC Output', 'Time (s)', 'Magnitude');
-
-% Compute the Fourier Transform of the recieved signal
-S_prime_recieved = fft(s_prime_recieved);
-S_prime_recieved = fftshift(S_prime_recieved);
-f_S_prime_recieved = (-length(S_prime_recieved)/2:length(S_prime_recieved)/2-1) * (Fs_out*carrier_to_input_clk_ratio*ADC_upsample_factor/length(S_prime_recieved));
-
-% Plot the frequency spectrum of the recieved signal
-fig_n = stemplot(fig_n, f_S_prime_recieved, abs(S_prime_recieved), 'Magnatude Spectrum of Recieved Signal', 'Frequency (Hz)', 'Magnitude');
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-
 
 
 
