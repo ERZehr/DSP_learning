@@ -10,7 +10,8 @@ numBits = 64;
 numBytes = numBits / 8;
 M = 4;              % M-PSK
 numSymbols = numBits/log2(M);   % Number of symbols in transmission
-Fs_in = 1e8; % input symbol frequency (Hz)
+Fs_in = 1e7; % input symbol frequency (Hz)
+BW_in = Fs_in / 2;
 symbol_duration = numSymbols/Fs_in; % input signal duration (s)
 
 % Pulse Shaping
@@ -19,16 +20,31 @@ span = 16;          % Filter span (pulse shape filter order is span*L)
 rolloff = 1;      % Alpha (0 goes to sinc, 1 goes to more square shaped in time) "excess bandwidth"
 F_int = 16;  %  pulse shpaer interpolation factor
 Fs_out = Fs_in * F_int;  % output pulse shpaer sample frequency
-C = 1;
+BW_out = Fs_out / 2;
+C = 4;
 phi_int = C/F_int;    % NCO Step
 
 % IQ generation
-carrier_frequency = 1e8;
+carrier_frequency = 2e8;
 
 % Channel Parameters
 linear_channel_attenuation = 1;   % greater number = greater attenuation
-gauss_noise_level = .5;            % greater number = greater noise
-salt_and_pepper_noise_level = .8;  % greater number = greater noise
+gauss_noise_level = 0;            % greater number = greater noise
+salt_and_pepper_noise_level = 0;  % greater number = greater noise
+
+% ADC Parameters
+ADC_interpolation_factor = 8;
+
+% ADC Decimator Parameters
+ADC_decimator_factor = ADC_interpolation_factor;
+
+% Reciever LO/Filter Parameters
+LO_recovery_cutoff = carrier_frequency * ADC_interpolation_factor / ADC_decimator_factor;
+
+% Sampler Parameters
+rejection_ratio = .3;
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -42,7 +58,7 @@ fig_n = stemplot(fig_n, symbol_axis, bits, 'Input Binary Signal', 'Time (s)', 'M
 [bitGroups, symbolMap, MpskSymbols] = genMpsk(M, bits);
 
 % Plot the MPSK constellation 
-fig_n = scatterplot(fig_n, real(symbolMap), imag(symbolMap), 'MPSK Constellation', 'In Phase Magntaude', 'Quadriture Magntaude', 'filled', 'MarkerFaceColor','b');
+%fig_n = scatterplot(fig_n, real(symbolMap), imag(symbolMap), 'MPSK Constellation', 'In Phase Magntaude', 'Quadriture Magntaude', 'filled', 'MarkerFaceColor','b');
 
 % Plot the input real and complex signals in time
 symbol_axis = 0:1/Fs_in:symbol_duration - (1/Fs_in);
@@ -52,13 +68,13 @@ fig_n = stemplot(fig_n, symbol_axis, imag(MpskSymbols), 'Input Mpsk Q signal', '
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Generate pulse shaping filter
-h = genPulseFilter(rolloff, span, L, "normal");
+h = genPulseFilter(rolloff, span, L, "sqrt");
 [H, w] = freqz(h, 1, 4096);
 H = [flip(H)' H']; w = [-flip(w)' w'];
 H_dB = 20*log10(abs(H));
 
 % Plot the impulse responses of the pulse shaping filter
-fig_n = stemplot(fig_n, 1:length(h), h, 'RRC Impulse Response', 'Tap Index', 'Normalized Magnitude');
+%fig_n = stemplot(fig_n, 1:length(h), h, 'RRC Impulse Response', 'Tap Index', 'Normalized Magnitude');
 
 % Plot the frequency responses of the pulse shaping filter
 fig_n = fig_n + 1;
@@ -114,7 +130,7 @@ for k = 1:(length(I_symbols)+row_size-1) % ensure the whole signal runs through 
 end
 I_symbols_shpaed = output_signal;
 
-
+shift_register = zeros(row_size,1);
 output_signal = [];
 accumulator = 0;
 Q_symbols = imag(MpskSymbols);
@@ -152,18 +168,18 @@ Q_shpaed_dft = fftshift(Q_shpaed_dft);
 Q_shpaed_dft_axis = (-length(Q_shpaed_dft)/2:length(Q_shpaed_dft)/2-1) * (Fs_out/length(Q_shpaed_dft));
 
 % Plot the magnitude spectrum of the modulated signals
-fig_n = stemplot(fig_n, I_shpaed_dft_axis, abs(I_shpaed_dft), 'Frequency Spectrum of ROM-Shift Pulse Shaper Output I', 'Frequency (Hz)', 'Magnitude');
-fig_n = stemplot(fig_n, Q_shpaed_dft_axis, abs(Q_shpaed_dft), 'Frequency Spectrum of ROM-Shift Pulse Shaper Output Q', 'Frequency (Hz)', 'Magnitude');
+%fig_n = stemplot(fig_n, I_shpaed_dft_axis, abs(I_shpaed_dft), 'Frequency Spectrum of ROM-Shift Pulse Shaper Output I', 'Frequency (Hz)', 'Magnitude');
+%fig_n = stemplot(fig_n, Q_shpaed_dft_axis, abs(Q_shpaed_dft), 'Frequency Spectrum of ROM-Shift Pulse Shaper Output Q', 'Frequency (Hz)', 'Magnitude');
 
 % Eye Diagrams
 % I
-figure(fig_n);
-eyediagram(I_symbols_shpaed, F_int);
-fig_n = fig_n + 1;
+%figure(fig_n);
+%eyediagram(I_symbols_shpaed, F_int);
+%fig_n = fig_n + 1;
 % Q
-figure(fig_n)
-eyediagram(Q_symbols_shpaed, F_int);
-fig_n = fig_n + 1;
+%figure(fig_n)
+%eyediagram(Q_symbols_shpaed, F_int);
+%fig_n = fig_n + 1;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -174,17 +190,15 @@ n = 0:length(I_symbols_shpaed)-1;
 cos_lo = cos(2*pi*carrier_frequency/Fs_out*n);
 sin_lo = sin(2*pi*carrier_frequency/Fs_out*n);
 % Plot the LO signals
-fig_n = stemplot(fig_n, symbol_axis, cos_lo, 'Cos LO', 'Time (s)', 'Magnitude');
-fig_n = stemplot(fig_n, symbol_axis, sin_lo, 'Sin LO', 'Time (s)', 'Magnitude');
+%fig_n = stemplot(fig_n, symbol_axis, cos_lo, 'Cos LO', 'Time (s)', 'Magnitude');
+%fig_n = stemplot(fig_n, symbol_axis, sin_lo, 'Sin LO', 'Time (s)', 'Magnitude');
 
-% geneteate I and Q mixed Signals
+% geneteate I and Q mixed Signals, select I
 I_mix = I_symbols_shpaed .* cos_lo - Q_symbols_shpaed .* sin_lo; % The actual real signal
 Q_mix = I_symbols_shpaed .* sin_lo + Q_symbols_shpaed .* cos_lo;
-% plot the I and Q mixed Signals
-fig_n = stemplot(fig_n, symbol_axis, I_mix, 'I mix', 'Time (s)', 'Magnitude');
-fig_n = stemplot(fig_n, symbol_axis, Q_mix, 'Q mix', 'Time (s)', 'Magnitude');
 
 s_prime = I_mix;
+%fig_n = stemplot(fig_n, symbol_axis, s_prime, 'Transmitted Signal', 'Time (s)', 'Magnitude');
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -199,21 +213,155 @@ fig_n = contplot(fig_n, symbol_axis, s_prime_t, 'DAC Output', 'Time (s)', 'Magni
 
 %%%%%%%%%%%%%%%%%%%%%%% CHANNEL %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Generate Gauss noise vector
-gaussNoise = randn(length(s_prime),1)'/(1/gauss_noise_level);
+gaussNoise = randn(length(s_prime),1)'*gauss_noise_level;
 
 % Generate Salt and Pepper noise vector
 prob = 0.05; % probability of impulse
 saltAndPepperNoise = zeros(1,length(s_prime));
 impulses = rand(1,length(s_prime)) < prob;
-saltAndPepperNoise(impulses) = (2*randi([0,1],1,sum(impulses))-1)'/(1/salt_and_pepper_noise_level);
+saltAndPepperNoise(impulses) = (2*randi([0,1],1,sum(impulses))-1)'*salt_and_pepper_noise_level;
 
 total_noise = gaussNoise + saltAndPepperNoise;
-fig_n = stemplot(fig_n, symbol_axis, total_noise, 'Channel Noise', 'Time (s)', 'Magnitude');
+%fig_n = stemplot(fig_n, symbol_axis, total_noise, 'Channel Noise', 'Time (s)', 'Magnitude');
 
-s_prime_recieved_t = s_prime * (1/linear_channel_attenuation) + total_noise;
-
-fig_n = contplot(fig_n, symbol_axis, s_prime_recieved_t, 'Recieved Analog Channel Signal', 'Time (s)', 'Magnitude');
+s_prime_recieved_t = s_prime / linear_channel_attenuation + total_noise;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Model ADC Interpolator
+h_adc_model = fir1(128, 1/ADC_interpolation_factor);
+h_adc_model = h_adc_model/max(h_adc_model);
+
+s_prime_recieved_t = s_prime / linear_channel_attenuation + total_noise;
+s_prime_recieved_t = upfirdn(s_prime_recieved_t, h_adc_model, ADC_interpolation_factor);
+
+symbol_axis_adc = 0:ADC_interpolation_factor/Fs_out:length(s_prime_recieved_t)*ADC_interpolation_factor/Fs_out - (ADC_interpolation_factor/Fs_out);
+%fig_n = stemplot(fig_n, symbol_axis_adc, s_prime_recieved_t, 'ADC Output', 'Time (s)', 'Magnitude');
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Compensate for ADC Interpolator TODO: make this a shift register
+% polyphase
+
+decimated_adc_output = decimate(s_prime_recieved_t, ADC_decimator_factor);
+%fig_n = stemplot(fig_n, 1:length(decimated_adc_output), decimated_adc_output, 'Compensated ADC Output', 'Time (s)', 'Magnitude');
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Split I and Q
+len_cos = 0:length(decimated_adc_output)-1;
+cos_lo_rec = cos(2*pi*carrier_frequency/Fs_out*len_cos);
+sin_lo_rec = sin(2*pi*carrier_frequency/Fs_out*len_cos);
+
+I_recovered = 2*(decimated_adc_output .* cos_lo_rec);
+Q_recovered = -2*(decimated_adc_output .* sin_lo_rec);
+
+% Filter at carrier frequency to eliminate undesirable trig identity components
+h_IQ_recovery = fir1(128, 1/2);
+I_recovered = upfirdn(I_recovered, h_IQ_recovery, 1, 1);
+Q_recovered = upfirdn(Q_recovered, h_IQ_recovery, 1, 1);
+
+%fig_n = stemplot(fig_n, 1:length(I_recovered), I_recovered, 'Recieved I Channel Signal', 'Time (s)', 'Magnitude');
+%fig_n = stemplot(fig_n, 1:length(Q_recovered), Q_recovered, 'Recieved Q Channel Signal', 'Time (s)', 'Magnitude');
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Apply matched filter and interpolate by 2 for Gardner
+gardner_interp_factor = 2;
+shift_register = zeros(row_size,1);
+I_symbols_recovered = [];
+accumulator = 0;
+phi_int_gardner = C/gardner_interp_factor;
+
+for k = 1:(length(I_recovered)+row_size-1) % ensure the whole signal runs through a zero initialized regester and runs all the way out
+    if k <= length(I_recovered)
+        shift_register = [I_recovered(k); shift_register(1:end-1)];
+    else
+        shift_register = [0; shift_register(1:end-1)];
+    end
+    while accumulator < C
+        ROM_addr_p = floor(gardner_interp_factor*accumulator/C);
+        output_sum = sum(shift_register .* ROM(:,ROM_addr_p+1));
+        I_symbols_recovered = [I_symbols_recovered, output_sum];
+        accumulator = accumulator + phi_int_gardner;
+    end
+    accumulator = accumulator - C;
+end
+
+shift_register = zeros(row_size,1);
+Q_symbols_recovered = [];
+accumulator = 0;
+
+for k = 1:(length(Q_recovered)+row_size-1) % ensure the whole signal runs through a zero initialized regester and runs all the way out
+   if k <= length(Q_recovered)
+       shift_register = [Q_recovered(k); shift_register(1:end-1)];
+   else
+       shift_register = [0; shift_register(1:end-1)];
+   end
+   while accumulator < C
+       ROM_addr_p = floor(gardner_interp_factor*accumulator/C);
+       output_sum = sum(shift_register .* ROM(:,ROM_addr_p+1));
+       Q_symbols_recovered = [Q_symbols_recovered, output_sum];
+       accumulator = accumulator + phi_int_gardner;
+   end
+   accumulator = accumulator - C;
+end
+
+%fig_n = stemplot(fig_n, 1:length(I_symbols_recovered), I_symbols_recovered, 'Recieved I Post Matched FIlte', 'Time (s)', 'Magnitude');
+%fig_n = stemplot(fig_n, 1:length(Q_symbols_recovered), Q_symbols_recovered, 'Recieved Q Post Matched FIlter', 'Time (s)', 'Magnitude');
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Downsample post Gardner to recover original I and Q
+h_post_gardner = fir1(128, 1/2);
+I_symbols_recovered = upfirdn(I_symbols_recovered, h_post_gardner, 1, 2);
+Q_symbols_recovered = upfirdn(Q_symbols_recovered, h_post_gardner, 1, 2);
+
+%fig_n = stemplot(fig_n, 1:length(I_symbols_recovered), I_symbols_recovered, 'Original I', 'Time (s)', 'Magnitude');
+%fig_n = stemplot(fig_n, 1:length(Q_symbols_recovered), Q_symbols_recovered, 'Original Q', 'Time (s)', 'Magnitude');
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Sample the recovered signal
+recieved_sampled_I = I_symbols_recovered(1:F_int:end);
+recieved_sampled_Q = Q_symbols_recovered(1:F_int:end);
+
+% implement a rejection ratio to reject transients 
+threshold = max([recieved_sampled_I recieved_sampled_Q])*rejection_ratio;
+recieved_sampled_I = recieved_sampled_I(abs(recieved_sampled_I) >= threshold);
+recieved_sampled_Q = recieved_sampled_Q(abs(recieved_sampled_Q) >= threshold);
+
+fig_n = stemplot(fig_n, 1:length(recieved_sampled_I), recieved_sampled_I, 'Sampled I', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, 1:length(recieved_sampled_Q), recieved_sampled_Q, 'Sampled Q', 'Time (s)', 'Magnitude');
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% map the resulting symbols to data bits
+recovered_symbols = recieved_sampled_I + 1j*recieved_sampled_Q;
+recovered_bits = decMpsk(M, recovered_symbols, symbolMap);
+
+fig_n = stemplot(fig_n, 0:length(recovered_bits)-1, recovered_bits, 'Recovered bits', 'Time (s)', 'Magnitude');
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+BER = sum(bits ~= recovered_bits) / length(bits);
+fprintf("Bit Error Rate: %f\n", BER);
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -271,4 +419,62 @@ function fig_n = scatterplot(fig_n, x, y, ttl, xlbl, ylbl, varargin)
     title(ttl);
     xlabel(xlbl); ylabel(ylbl);
     grid on;
+end
+
+function firpm_h = firpm_first_order_filter_gen(pass_type, wp, ws, Rp, Rs)
+    dev_pass = (10^(Rp/20)-1)/(10^(Rp/20)+1);
+    dev_stop = 10^(-Rs/20);
+    switch pass_type
+        case 'low'
+            f = [wp/pi ws/pi];
+            a = [1 0];
+            dev = [dev_pass dev_stop];
+        case 'high'
+            f = [ws/pi wp/pi];
+            a = [0 1];
+            dev = [dev_stop dev_pass];
+        otherwise
+            f = [wp/pi ws/pi];
+            a = [1 0];
+            dev = [dev_pass dev_stop];
+    end
+    [N,fo,ao,w] = firpmord(f,a,dev);
+    firpm_h = firpm(N,fo,ao,w);
+end
+
+function bitsRecovered = decMpsk(M, MpskSymbols, symbolMap)
+    % Pre-allocate recovered symbol indices
+    numSymbols = length(MpskSymbols);
+    recoveredIndices = zeros(numSymbols, 1);
+
+    % Map each received symbol to the nearest constellation point
+    for k = 1:numSymbols
+        [~, idx] = min(abs(MpskSymbols(k) - symbolMap)); % nearest constellation point
+        recoveredIndices(k) = idx; 
+    end
+
+    % Convert Gray code indices back to binary indices
+    if M == 2
+        % For BPSK, simply map +1 -> 1, -1 -> 0
+        bitsRecovered = (real(MpskSymbols) > 0);
+    else
+        % Reverse Gray coding
+        grayIndices = recoveredIndices - 1;          % MATLAB 1-index adjustment
+        binIndices = zeros(size(grayIndices));
+        for n = 1:length(grayIndices)
+            g = grayIndices(n);
+            b = 0;
+            mask = g;
+            while mask > 0
+                b = bitxor(b, mask);
+                mask = bitshift(mask, -1);
+            end
+            binIndices(n) = b;
+        end
+
+        % Convert integer symbol indices to bits
+        bitsPerSymbol = log2(M);
+        bitsRecovered = de2bi(binIndices, bitsPerSymbol, 'left-msb'); 
+        bitsRecovered = reshape(bitsRecovered.', [], 1);  % column vector
+    end
 end
