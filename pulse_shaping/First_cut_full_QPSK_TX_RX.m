@@ -27,22 +27,10 @@ phi_int = C/F_int;    % NCO Step
 % IQ generation
 carrier_frequency = 2e8;
 
-% DAC Parameters
-DAC_Amplification = 100;
-
 % Channel Parameters
 linear_channel_attenuation = 1;   % greater number = greater attenuation
-gauss_noise_level = 1;            % greater number = greater noise
+gauss_noise_level = 0;            % greater number = greater noise
 salt_and_pepper_noise_level = 0;  % greater number = greater noise
-
-% ADC Parameters
-ADC_interpolation_factor = 8;
-
-% ADC Decimator Parameters
-ADC_decimator_factor = ADC_interpolation_factor;
-
-% Reciever LO/Filter Parameters
-LO_recovery_cutoff = carrier_frequency * ADC_interpolation_factor / ADC_decimator_factor;
 
 % Sampler Parameters
 rejection_ratio = 0.3;
@@ -150,13 +138,13 @@ Q_shpaed_dft_axis = (-length(Q_shpaed_dft)/2:length(Q_shpaed_dft)/2-1) * (Fs_out
 
 % Eye Diagrams
 % I
-figure(fig_n);
-eyediagram(I_symbols_shpaed, F_int);
-fig_n = fig_n + 1;
+%figure(fig_n);
+%eyediagram(I_symbols_shpaed, F_int);
+%fig_n = fig_n + 1;
 % Q
-figure(fig_n)
-eyediagram(Q_symbols_shpaed, F_int);
-fig_n = fig_n + 1;
+%figure(fig_n)
+%eyediagram(Q_symbols_shpaed, F_int);
+%fig_n = fig_n + 1;
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
@@ -176,7 +164,6 @@ s_prime = I_mix;
 fig_n = stemplot(fig_n, symbol_axis, s_prime, 'Transmitted Signal', 'Time (s)', 'Magnitude');
 
 % For DAC visualization purposes "convert the signal to analog"
-s_prime = DAC_Amplification*s_prime;
 fig_n = contplot(fig_n, symbol_axis, s_prime, 'DAC Output', 'Time (s)', 'Magnitude');
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -200,35 +187,13 @@ s_prime_recieved = s_prime / linear_channel_attenuation + total_noise;
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Model Potential ADC Interpolation
-h_adc_model = fir1(128, 1/ADC_interpolation_factor);
-h_adc_model = h_adc_model/max(h_adc_model);
-
-s_prime_recieved = upfirdn(s_prime_recieved, h_adc_model, ADC_interpolation_factor);
-
-symbol_axis_adc = 0:1/Fs_out/ADC_interpolation_factor:length(s_prime_recieved)/ADC_interpolation_factor/Fs_out - (1/Fs_out/ADC_interpolation_factor);
-fig_n = stemplot(fig_n, symbol_axis_adc, s_prime_recieved, 'ADC Output', 'Time (s)', 'Magnitude');
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Compensate for ADC Interpolator TODO: make this a shift register
-% polyphase
-
-decimated_adc_output = upfirdn(s_prime_recieved, h_adc_model, 1, ADC_decimator_factor);
-decimated_symbol_axis = 0:1/Fs_out:length(decimated_adc_output)/Fs_out - (1/Fs_out);
-fig_n = stemplot(fig_n, decimated_symbol_axis, decimated_adc_output, 'Compensated ADC Output', 'Time (s)', 'Magnitude');
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Split I and Q  TODO: add simulated shift from Gardner Feedback
-len_cos = 0:length(decimated_adc_output)-1;
+len_cos = 0:length(s_prime_recieved)-1;
 cos_lo_rec = cos(2*pi*carrier_frequency/Fs_out*len_cos);
 sin_lo_rec = sin(2*pi*carrier_frequency/Fs_out*len_cos);
 
-I_recovered = 2*(decimated_adc_output .* cos_lo_rec);
-Q_recovered = -2*(decimated_adc_output .* sin_lo_rec);
+I_recovered = 2*(s_prime_recieved .* cos_lo_rec);
+Q_recovered = -2*(s_prime_recieved .* sin_lo_rec);
 
 % Filter at carrier frequency to eliminate undesirable trig identity components
 % we really just have to filter out 2Fs, so pass anything less then 5 and
@@ -246,41 +211,35 @@ h_IQ_recovery = firpm(N,fo,ao,w);
 I_recovered = filter(h_IQ_recovery, 1, I_recovered);
 Q_recovered = filter(h_IQ_recovery, 1, Q_recovered);
 
-fig_n = stemplot(fig_n, decimated_symbol_axis, I_recovered, 'Recieved I Channel Signal', 'Time (s)', 'Magnitude');
-fig_n = stemplot(fig_n, decimated_symbol_axis, Q_recovered, 'Recieved Q Channel Signal', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, symbol_axis, I_recovered, 'Recieved I Channel Signal', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, symbol_axis, Q_recovered, 'Recieved Q Channel Signal', 'Time (s)', 'Magnitude');
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Apply matched filter to I, interpolate by 2 for Gardner, Gardner TED, and
-% Farrow filter
+% Apply matched filter to I, Gardner TED, and Farrow filter
 
 % Matched filter
 ROM_matched = ROM;
 matched_filter_shift_register = zeros(row_size,1);
-%Interpolation
-matched_filter_interpolation_factor = 2;
-accumulator = 0;
-phi_int_matched_interopolator = C/matched_filter_interpolation_factor;
+%Decimation
+matched_filter_decimation_factor = 5;
+out_idx = 0;
 % Gardner TED
 TED_error = 0;
 TED_vector_I = [0];
-% mu control loop
-TED_proportional_gain = 0.0000002;
-TED_integrator_gain = 0.0000005;
-TED_loop_integration = 0;
+% Farrow Values
 mu = 0;
 TED_garnder_values_I = [0];
-% Farrow Values
-Farrow_shift_register_I = [];
-Farrow_new_value = 0;
-Farrow_Length = 5;
+Farrow_Length = 4;
+farrow_sr = zeros(Farrow_Length,1);
 Farrow_A = calcFarrowA(Farrow_Length);
-Farrow_powers = (0:Farrow_Length-1).';
+polynomial_vals = zeros(Farrow_Length, 1);
 
 
 % Output
 I_symbols_recovered = [];
+I_symbols_recovered_no_farrow = [];
 
 for k = 1:(length(I_recovered)+row_size-1) % ensure the whole signal runs through a zero initialized regester and runs all the way out
     % 1. Shift in single value
@@ -291,65 +250,77 @@ for k = 1:(length(I_recovered)+row_size-1) % ensure the whole signal runs throug
     end
 
     % 2. Calculate output values
-    while accumulator < C
-        % 2.1 Apply matched filter and interpolate
-        ROM_addr_p = floor(matched_filter_interpolation_factor*accumulator/C) + 1;                  % Which matched filter ROM row values to use
-        output_sum = sum(matched_filter_shift_register .* ROM_matched(:,ROM_addr_p)); % Calculate a single output value
-        I_symbols_recovered = [I_symbols_recovered, output_sum];                      % Shift out a single value  
-        accumulator = accumulator + phi_int_matched_interopolator;                    % update the NCO
-        % 2.2 Conduct Gardner TED calculation
-        if(length(I_symbols_recovered)>2)                                           % We need at least 3 values to run Gardner TED
-            TED_error = I_symbols_recovered(end-1)*(I_symbols_recovered(end) - ...
-                I_symbols_recovered(end-2)) / sqrt(abs(I_symbols_recovered(end))^2 + ...
-                abs(I_symbols_recovered(end-1))^2 + abs(I_symbols_recovered(end-1))^2);  % Calculate and normalize TED error
-            TED_vector_I = [TED_vector_I TED_error];                                     % Log for plotting
-            TED_loop_integration = TED_loop_integration + TED_integrator_gain*TED_error; % Apply integration gain
-            mu = 1 - mu + TED_proportional_gain*TED_error + TED_loop_integration;            % Apply proportional gain
-            TED_garnder_values_I = [TED_garnder_values_I mu];                            % Update mu log for plotting
+    % Only produce output every matched_filter_decimation_factor samples
+    if mod(k-1, matched_filter_decimation_factor) == 0 % 2.1 Apply matched filter and decimate
+        temp_sum = 0;
+        for p = 1:matched_filter_decimation_factor
+            temp_sum = temp_sum + sum(matched_filter_shift_register .* ROM(:,p));
         end
-
-        % 2.3 Update Farrow Values
-        if(length(I_symbols_recovered)>=Farrow_Length)       % We need at least N values to run a N point Farrow filter
-            Farrow_new_value = sum((mu.^Farrow_powers) .* (Farrow_A * I_symbols_recovered((end-Farrow_Length+1):end)'));
-            Farrow_shift_register_I = [Farrow_shift_register_I Farrow_new_value];
+        farrow_sr = [temp_sum; farrow_sr(1:Farrow_Length-1)]; % 2.2 Apply farrow filter
+        if(length(I_symbols_recovered) >= Farrow_Length)
+            % Polynomial branches
+            for m = 1:Farrow_Length
+                polynomial_vals(m) = Farrow_A(m,:) * farrow_sr;
+            end
+            % Apply mu powers
+            Farrow_out = 0;
+            for m = 1:Farrow_Length
+                Farrow_out = Farrow_out + (mu^(m-1))*polynomial_vals(m);
+            end
+            I_symbols_recovered = [I_symbols_recovered Farrow_out];
         else
-            Farrow_shift_register_I = [Farrow_shift_register_I 0];
+            I_symbols_recovered = [I_symbols_recovered temp_sum];
+        end
+        I_symbols_recovered_no_farrow = [I_symbols_recovered_no_farrow temp_sum];
+        % 2.2 Conduct Gardner TED calculation
+        if(length(I_symbols_recovered)>2)                                            % We need at least 3 values to run Gardner TED
+            TED_error = I_symbols_recovered(end-1)*(I_symbols_recovered(end) - ...
+                I_symbols_recovered(end-2)) / (5*sqrt(abs(I_symbols_recovered(end))^2 + ...
+                abs(I_symbols_recovered(end-1))^2 + abs(I_symbols_recovered(end-2))^2)); % Calculate and normalize TED error
+            mu = mu + TED_error;                                                          % Apply error
         end
 
+        TED_vector_I = [TED_vector_I TED_error];                                 % Log for plotting
+        TED_garnder_values_I = [TED_garnder_values_I mu];                        % Update mu log for plotting
 
+        out_idx = out_idx + 1;
     end
-    accumulator = accumulator - C;
 end
-TED_vector_I = [TED_vector_I 0];
-TED_garnder_values_I = [TED_garnder_values_I TED_garnder_values_I(end)];
-gardner_rate_axis = 0:1/Fs_out/matched_filter_interpolation_factor:length(I_symbols_recovered)/matched_filter_interpolation_factor/Fs_out - (1/Fs_out/matched_filter_interpolation_factor);
+TED_vector_I = TED_vector_I(1:end-1);
+TED_garnder_values_I = TED_garnder_values_I(1:end-1);
+gardner_rate_axis = 0:1/Fs_out/matched_filter_decimation_factor:length(I_symbols_recovered)/matched_filter_decimation_factor/Fs_out - (1/Fs_out/matched_filter_decimation_factor);
 fig_n = stemplot(fig_n, gardner_rate_axis, TED_vector_I, 'Gardner Values I', 'Time (s)', 'Magnitude');
 fig_n = contplot(fig_n, gardner_rate_axis, TED_garnder_values_I, 'Gardner mu I', 'Time (s)', 'Magnitude', '--');
-fig_n = stemplot(fig_n, gardner_rate_axis, Farrow_shift_register_I, 'Farrow Filter Output', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, gardner_rate_axis, I_symbols_recovered, 'I Farrow Filter Output', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, gardner_rate_axis, I_symbols_recovered_no_farrow, 'I Recovered NO Farrow Filter Output', 'Time (s)', 'Magnitude');
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-% Apply matched filter to Q, interpolate by 2 for Gardner, Gardner TED, and
-% Farrow filter
+% Apply matched filter to Q, Gardner TED, and Farrow filter
 
 % Matched filter
+ROM_matched = ROM;
 matched_filter_shift_register = zeros(row_size,1);
-%Interpolation
-accumulator = 0;
+%Decimation
+matched_filter_decimation_factor = 5;
+out_idx = 0;
 % Gardner TED
 TED_error = 0;
 TED_vector_Q = [0];
-% mu control loop
-TED_loop_integration = 0;
+% Farrow Values
 mu = 0;
 TED_garnder_values_Q = [0];
-% Farrow Values
-Farrow_shift_register_Q = [];
-Farrow_new_value = 0;
+Farrow_Length = 4;
+farrow_sr = zeros(Farrow_Length,1);
+Farrow_A = calcFarrowA(Farrow_Length);
+polynomial_vals = zeros(Farrow_Length, 1);
 
 
 % Output
 Q_symbols_recovered = [];
+Q_symbols_recovered_no_farrow = [];
 
 for k = 1:(length(Q_recovered)+row_size-1) % ensure the whole signal runs through a zero initialized regester and runs all the way out
     % 1. Shift in single value
@@ -360,46 +331,56 @@ for k = 1:(length(Q_recovered)+row_size-1) % ensure the whole signal runs throug
     end
 
     % 2. Calculate output values
-    while accumulator < C
-        % 2.1 Apply matched filter and interpolate
-        ROM_addr_p = floor(matched_filter_interpolation_factor*accumulator/C) + 1;                  % Which matched filter ROM row values to use
-        output_sum = sum(matched_filter_shift_register .* ROM_matched(:,ROM_addr_p)); % Calculate a single output value
-        Q_symbols_recovered = [Q_symbols_recovered, output_sum];                      % Shift out a single value  
-        accumulator = accumulator + phi_int_matched_interopolator;                    % update the NCO
-        % 2.2 Conduct Gardner TED calculation
-        if(length(Q_symbols_recovered)>2)                                           % We need at least 3 values to run Gardner TED
-            TED_error = Q_symbols_recovered(end-1)*(Q_symbols_recovered(end) - ...
-                Q_symbols_recovered(end-2)) / sqrt(abs(Q_symbols_recovered(end))^2 + ...
-                abs(Q_symbols_recovered(end-1))^2 + abs(Q_symbols_recovered(end-1))^2);  % Calculate and normalize TED error
-            TED_vector_Q = [TED_vector_Q TED_error];                                     % Log for plotting
-            TED_loop_integration = TED_loop_integration + TED_integrator_gain*TED_error; % Apply integration gain
-            mu = 1 - mu + TED_proportional_gain*TED_error + TED_loop_integration;            % Apply proportional gain
-            TED_garnder_values_Q = [TED_garnder_values_Q mu];                            % Update mu log for plotting
+    % Only produce output every matched_filter_decimation_factor samples
+    if mod(k-1, matched_filter_decimation_factor) == 0 % 2.1 Apply matched filter and decimate
+        temp_sum = 0;
+        for p = 1:matched_filter_decimation_factor
+            temp_sum = temp_sum + sum(matched_filter_shift_register .* ROM(:,p));
         end
-
-        % 2.3 Update Farrow Values
-        if(length(Q_symbols_recovered)>=Farrow_Length)       % We need at least N values to run a N point Farrow filter
-            Farrow_new_value = sum((mu.^Farrow_powers) .* (Farrow_A * Q_symbols_recovered(end-Farrow_Length+1:end)'));
-            Farrow_shift_register_Q = [Farrow_shift_register_Q Farrow_new_value];
+        farrow_sr = [temp_sum; farrow_sr(1:Farrow_Length-1)]; % 2.2 Apply farrow filter
+        if(length(Q_symbols_recovered) >= Farrow_Length)
+            % Polynomial branches
+            for m = 1:Farrow_Length
+                polynomial_vals(m) = Farrow_A(m,:) * farrow_sr;
+            end
+            % Apply mu powers
+            Farrow_out = 0;
+            for m = 1:Farrow_Length
+                Farrow_out = Farrow_out + (mu^(m-1))*polynomial_vals(m);
+            end
+            Q_symbols_recovered = [Q_symbols_recovered Farrow_out];
         else
-            Farrow_shift_register_Q = [Farrow_shift_register_Q 0];
+            Q_symbols_recovered = [Q_symbols_recovered temp_sum];
+        end
+        Q_symbols_recovered_no_farrow = [Q_symbols_recovered_no_farrow temp_sum];
+        % 2.2 Conduct Gardner TED calculation
+        if(length(Q_symbols_recovered)>2)                                            % We need at least 3 values to run Gardner TED
+            TED_error = Q_symbols_recovered(end-1)*(Q_symbols_recovered(end) - ...
+                Q_symbols_recovered(end-2)) / (10*sqrt(abs(Q_symbols_recovered(end))^2 + ...
+                abs(Q_symbols_recovered(end-1))^2 + abs(Q_symbols_recovered(end-2))^2)); % Calculate and normalize TED error
+            mu = mu + TED_error;                                                          % Apply error
         end
 
+        TED_vector_Q = [TED_vector_Q TED_error];                                 % Log for plotting
+        TED_garnder_values_Q = [TED_garnder_values_Q mu];                        % Update mu log for plotting
+
+        out_idx = out_idx + 1;
     end
-    accumulator = accumulator - C;
 end
-TED_vector_Q = [TED_vector_Q 0];
-TED_garnder_values_Q = [TED_garnder_values_Q TED_garnder_values_Q(end)];
+TED_vector_Q = TED_vector_Q(1:end-1);
+TED_garnder_values_Q = TED_garnder_values_Q(1:end-1);
+gardner_rate_axis = 0:1/Fs_out/matched_filter_decimation_factor:length(Q_symbols_recovered)/matched_filter_decimation_factor/Fs_out - (1/Fs_out/matched_filter_decimation_factor);
 fig_n = stemplot(fig_n, gardner_rate_axis, TED_vector_Q, 'Gardner Values Q', 'Time (s)', 'Magnitude');
 fig_n = contplot(fig_n, gardner_rate_axis, TED_garnder_values_Q, 'Gardner mu Q', 'Time (s)', 'Magnitude', '--');
-fig_n = stemplot(fig_n, gardner_rate_axis, Farrow_shift_register_Q, 'Farrow Filter Output', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, gardner_rate_axis, Q_symbols_recovered, 'Q Farrow Filter Output', 'Time (s)', 'Magnitude');
+fig_n = stemplot(fig_n, gardner_rate_axis, Q_symbols_recovered_no_farrow, 'Q Recovered NO Farrow Filter Output', 'Time (s)', 'Magnitude');
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Sample the recovered signal
-recieved_sampled_I = Farrow_shift_register_I(1:matched_filter_interpolation_factor*F_int:end);
-recieved_sampled_Q = Farrow_shift_register_Q(1:matched_filter_interpolation_factor*F_int:end);
+recieved_sampled_I = I_symbols_recovered(1:2:end);
+recieved_sampled_Q = Q_symbols_recovered(1:2:end);
 
 
 recieved_sampled_symbol_axis_I = 0:1/Fs_in:length(recieved_sampled_I)/Fs_in - (1/Fs_in);
@@ -571,5 +552,6 @@ function Farrow_A = calcFarrowA(order)
             V(i,j+1) = t(i)^j;
         end
     end
-    Farrow_A = inv(V)';
+    Farrow_A = inv(V);
+    disp(Farrow_A);
 end
