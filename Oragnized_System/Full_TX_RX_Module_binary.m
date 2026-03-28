@@ -62,10 +62,10 @@ fig_n = stemplot(fig_n, symbol_axis, imag(MpskSymbols), 'Input Mpsk Q signal', '
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Generate and apply Barker interpolating pulse shaping filter
 h = genPulseFilter(rolloff, span, L, "sqrt");
-ROM = barkerROM(h, L);
+ROM = genPolyphaseROM(h, L, 'counter-clockwise');
 
 % Apply pulse shaping filter to I
-[I_symbols_shaped, Q_symbols_shaped] = applyBarkerInterpolator(ROM, real(MpskSymbols),imag(MpskSymbols),F_int,C);
+[I_symbols_shaped, Q_symbols_shaped] = applyBarkerInterpolator(ROM', real(MpskSymbols),imag(MpskSymbols),F_int,C);
 
 % Plot the output of the pulse shaper filter
 symbol_axis = 0:1/Fs_out:length(I_symbols_shaped)/Fs_out - (1/Fs_out);
@@ -158,8 +158,8 @@ grid on
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % Sample the recovered signal
 h = gen_firpm_first_order_h('low', 0.49*pi, 0.51*pi, 1, 30);
-ROM = barkerROM(h, 2);
-[recieved_sampled_I, recieved_sampled_Q]= applyBarkerDecimator(ROM,I_symbols_recovered,Q_symbols_recovered,2);
+ROM = genPolyphaseROM(h, 2, 'counter-clockwise');
+[recieved_sampled_I, recieved_sampled_Q]= applyBarkerDecimator(ROM',I_symbols_recovered,Q_symbols_recovered,2);
 
 
 recieved_sampled_symbol_axis_I = 0:1/Fs_in:length(recieved_sampled_I)/Fs_in - (1/Fs_in);

@@ -1,10 +1,10 @@
 function [I_output, Q_output] = applyBarkerDecimator(ROM,I_input,Q_input,M)
 
     % Operate on input signal
-    row_size = size(ROM,1);
+    row_size = size(ROM,1);              % Number of taps in a ROM row
     shift_register = zeros(2, row_size); % Declare 2xrow size shift regester
     output_signal = [];                  % Declare 2xoutput vector
-    symbols = [I_input; Q_input];              % Compress I and Q into a 2xlength matrix
+    symbols = [I_input; Q_input];        % Compress I and Q into a 2xlength matrix
     for k = 1:(size(symbols,2) + row_size)
         % Shift in the current input
         if k <= size(symbols,2)
